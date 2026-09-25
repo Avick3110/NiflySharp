@@ -173,6 +173,11 @@ namespace NiflySharp
                 using var file = new FileStream(fileName, FileMode.Open, FileAccess.Read);
                 return Load(file, options);
             }
+            catch (InvalidDataException)
+            {
+                // A count or size that cannot fit in the file is reported, not swallowed
+                throw;
+            }
             catch
             {
                 return 1;
@@ -206,6 +211,12 @@ namespace NiflySharp
             try
             {
                 Header.Read(streamReader);
+            }
+            catch (InvalidDataException)
+            {
+                // A header count or size that cannot fit in the file
+                Clear();
+                throw;
             }
             catch
             {
@@ -270,23 +281,51 @@ namespace NiflySharp
                         return 1;
                     }
 
+                    // The stored size is the unknown block's buffer size, so it must fit in what is left
+                    long left = streamReader.BytesLeft;
+                    if (blockSize > left)
+                    {
+                        Clear();
+                        throw new InvalidDataException($"Block {i} ({blockTypeStr}) is a type this library does not know, and its stored size of {blockSize} is larger than the {left} bytes left in the stream.");
+                    }
+
                     HasUnknownBlocks = true;
                     block = new NiUnknown(streamReversible, blockSize);
                 }
 
                 if (blockStreamable != null)
                 {
+                    long blockStart = stream.CanSeek ? stream.Position : -1;
+
                     try
                     {
                         // Read the block
                         //streamReversible.Argument = null;
                         blockStreamable.Sync(streamReversible);
                     }
+                    catch (InvalidDataException ex)
+                    {
+                        // A count inside the block that cannot fit in the file
+                        Clear();
+                        throw new InvalidDataException($"Block {i} ({blockTypeStr}): {ex.Message}", ex);
+                    }
                     catch
                     {
                         // Truncated or malformed block data
                         Clear();
                         return 1;
+                    }
+
+                    // A block that read past its stored size has misread its own data and would misalign every later block
+                    int declaredSize = Header.GetBlockSize(i);
+                    if (blockStart >= 0 && declaredSize >= 0)
+                    {
+                        long readSize = stream.Position - blockStart;
+                        if (readSize > declaredSize)
+                        {
+                            Clear();
+                            throw new InvalidDataException($"Block {i} ({blockTypeStr}) read {readSize} bytes, past its stored size of {declaredSize}.");
+                        }
                     }
 
                     block = blockStreamable as NiObject;

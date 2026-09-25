@@ -45,6 +45,9 @@ namespace NiflySharp
                 if (stream.CurrentMode == NiStreamReversible.Mode.Read && sz < 0)
                     throw new System.IO.InvalidDataException("Read string length is < 0!");
 
+                if (stream.CurrentMode == NiStreamReversible.Mode.Read)
+                    stream.In.CheckCount(sz, 1, "A string length");
+
                 var buf = new byte[sz];
 
                 if (stream.CurrentMode == NiStreamReversible.Mode.Write)

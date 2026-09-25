@@ -93,6 +93,7 @@ namespace NiflySharp
             else
             {
                 int bigSize = stream.Reader.ReadInt32();
+                stream.CheckCount(bigSize, 1, "A string length");
                 bytes = stream.Reader.ReadBytes(bigSize);
             }
 

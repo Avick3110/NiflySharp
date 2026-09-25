@@ -274,6 +274,7 @@ namespace NiflySharp
             }
 
             BlockCount = stream.Reader.ReadInt32();
+            stream.CheckCount(BlockCount, 1, "The header's block count");
 
             if (Version.IsBethesda())
             {
@@ -299,7 +300,9 @@ namespace NiflySharp
             }
             else if (vfile >= NiFileVersion.V30_0_0_2)
             {
-                embedData = new List<byte>(stream.Reader.ReadInt32());
+                int embedSize = stream.Reader.ReadInt32();
+                stream.CheckCount(embedSize, 1, "The header's embedded data size");
+                embedData = new List<byte>(embedSize);
 
                 for (int i = 0; i < embedData.Capacity; i++)
                     embedData.Add(stream.Reader.ReadByte());
@@ -307,7 +310,9 @@ namespace NiflySharp
 
             if (vfile >= NiFileVersion.V5_0_0_1)
             {
-                blockTypes = new List<NiString>(stream.Reader.ReadUInt16());
+                ushort numBlockTypes = stream.Reader.ReadUInt16();
+                stream.CheckCount(numBlockTypes, 4, "The header's block type count");
+                blockTypes = new List<NiString>(numBlockTypes);
 
                 for (int i = 0; i < blockTypes.Capacity; i++)
                 {
@@ -316,6 +321,7 @@ namespace NiflySharp
                     blockTypes.Add(blockType);
                 }
 
+                stream.CheckCount(BlockCount, 2, "The header's block count");
                 blockTypeIndices = new List<ushort>(BlockCount);
 
                 for (int i = 0; i < blockTypeIndices.Capacity; i++)
@@ -324,6 +330,7 @@ namespace NiflySharp
 
             if (vfile >= NiFileVersion.V20_2_0_5)
             {
+                stream.CheckCount(BlockCount, 4, "The header's block count");
                 blockSizes = new List<int>(BlockCount);
 
                 for (int i = 0; i < BlockCount; i++)
@@ -333,6 +340,7 @@ namespace NiflySharp
             if (vfile >= NiFileVersion.V20_1_0_1)
             {
                 int numStrings = (int)stream.Reader.ReadUInt32();
+                stream.CheckCount(numStrings, 4, "The header's string count");
                 strings = new List<NiString>(numStrings);
                 maxStringLen = stream.Reader.ReadUInt32();
 
@@ -346,7 +354,9 @@ namespace NiflySharp
 
             if (vfile >= NiVersion.ToFile(5, 0, 0, 6))
             {
-                groupSizes = new List<int>(stream.Reader.ReadInt32());
+                int numGroups = stream.Reader.ReadInt32();
+                stream.CheckCount(numGroups, 4, "The header's group count");
+                groupSizes = new List<int>(numGroups);
 
                 for (int i = 0; i < groupSizes.Capacity; i++)
                     groupSizes.Add(stream.Reader.ReadInt32());
