@@ -296,6 +296,10 @@ namespace NiflySharp
                 if (blockStreamable != null)
                 {
                     long blockStart = stream.CanSeek ? stream.Position : -1;
+                    int declaredSize = Header.GetBlockSize(i);
+
+                    // Counts inside the block are bounded by what its stored size has left, where that size is known
+                    streamReader.BlockEnd = blockStart >= 0 && declaredSize >= 0 ? blockStart + declaredSize : -1;
 
                     try
                     {
@@ -305,9 +309,10 @@ namespace NiflySharp
                     }
                     catch (InvalidDataException ex)
                     {
-                        // A count inside the block that cannot fit in the file
+                        // A count inside the block that cannot fit in its stored size or in the file
                         Clear();
-                        throw new InvalidDataException($"Block {i} ({blockTypeStr}): {ex.Message}", ex);
+                        var message = $"Block {i} ({blockTypeStr}): {ex.Message}";
+                        throw NifLoadErrors.IsBlockSizeMismatch(ex) ? NifLoadErrors.BlockSizeMismatch(message, ex) : new InvalidDataException(message, ex);
                     }
                     catch
                     {
@@ -315,16 +320,19 @@ namespace NiflySharp
                         Clear();
                         return 1;
                     }
+                    finally
+                    {
+                        streamReader.BlockEnd = -1;
+                    }
 
                     // A block that read past its stored size has misread its own data and would misalign every later block
-                    int declaredSize = Header.GetBlockSize(i);
                     if (blockStart >= 0 && declaredSize >= 0)
                     {
                         long readSize = stream.Position - blockStart;
                         if (readSize > declaredSize)
                         {
                             Clear();
-                            throw new InvalidDataException($"Block {i} ({blockTypeStr}) read {readSize} bytes, past its stored size of {declaredSize}.");
+                            throw NifLoadErrors.BlockSizeMismatch($"Block {i} ({blockTypeStr}) read {readSize} bytes, past its stored size of {declaredSize}.");
                         }
                     }
 

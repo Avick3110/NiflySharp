@@ -16,25 +16,28 @@ namespace NiflySharp.Test
     /// </summary>
     public class BoundedCountTests
     {
-        [Fact(DisplayName = "Four corrupted bytes that misalign the blocks throw a block overrun")]
-        public void FourByteCorruption_ThrowsBlockOverrun()
+        [Fact(DisplayName = "Four corrupted bytes whose count overruns the block throw a block size mismatch")]
+        public void FourByteCorruption_ThrowsBlockSizeMismatch()
         {
             var bytes = Corrupt((948, 0xC0), (756, 0xB1), (719, 0x4C), (385, 0x75));
 
             var ex = Assert.Throws<InvalidDataException>(() => Load(bytes));
 
-            Assert.Contains("Block 0 (NiNode) read 556 bytes, past its stored size of 88", ex.Message);
+            Assert.Contains("Block 0 (NiNode): A list count of 117 needs at least 468 bytes, but only", ex.Message);
+            Assert.True(NifLoadErrors.IsBlockSizeMismatch(ex));
         }
 
-        [Fact(DisplayName = "A corrupted effect count that runs the root node past its size throws a block overrun")]
-        public void EffectCountByte_ThrowsBlockOverrun()
+        [Fact(DisplayName = "A corrupted effect count larger than the root node's stored size throws a block size mismatch")]
+        public void EffectCountByte_ThrowsBlockSizeMismatch()
         {
             // Byte 385 is the low byte of the root node's effect count; 0x75 makes it 117 refs, 468 bytes past its end.
             var bytes = Corrupt((385, 0x75));
 
             var ex = Assert.Throws<InvalidDataException>(() => Load(bytes));
 
-            Assert.Contains("Block 0 (NiNode) read 556 bytes, past its stored size of 88", ex.Message);
+            Assert.Contains("Block 0 (NiNode): A list count of 117 needs at least 468 bytes, but only", ex.Message);
+            Assert.Contains("left in the block's stored size", ex.Message);
+            Assert.True(NifLoadErrors.IsBlockSizeMismatch(ex));
         }
 
         [Fact(DisplayName = "A header block count larger than the file throws")]
@@ -50,17 +53,23 @@ namespace NiflySharp.Test
             Assert.Contains($"The header's block count of {int.MaxValue}", ex.Message);
         }
 
-        [Fact(DisplayName = "A block that reads more than its stored size throws")]
+        [Fact(DisplayName = "A block that reads more than its stored size throws a block size mismatch")]
         public void BlockLongerThanStoredSize_Throws()
         {
+            // The alpha property has no list after its name, so a lowered stored size is caught at the block's end.
             var bytes = BuildSyntheticSe();
-            int sizeAt = BlockSizeOffset(bytes, 0);
-            Assert.Equal(88, BitConverter.ToInt32(bytes, sizeAt));
-            BitConverter.GetBytes(40).CopyTo(bytes, sizeAt);
+            var nif = new NifFile();
+            using (var ms = new MemoryStream(bytes, writable: false))
+                Assert.Equal(0, nif.Load(ms));
+            int alphaId = nif.Blocks.FindIndex(b => b is NiAlphaProperty);
+            int sizeAt = BlockSizeOffset(bytes, alphaId);
+            int stored = BitConverter.ToInt32(bytes, sizeAt);
+            BitConverter.GetBytes(stored - 2).CopyTo(bytes, sizeAt);
 
             var ex = Assert.Throws<InvalidDataException>(() => Load(bytes));
 
-            Assert.Contains("Block 0 (NiNode) read 88 bytes, past its stored size of 40", ex.Message);
+            Assert.Contains($"Block {alphaId} (NiAlphaProperty) read {stored} bytes, past its stored size of {stored - 2}", ex.Message);
+            Assert.True(NifLoadErrors.IsBlockSizeMismatch(ex));
         }
 
         [Fact(DisplayName = "An unknown block whose stored size is larger than the file throws before allocating")]
@@ -93,6 +102,61 @@ namespace NiflySharp.Test
             var ex = Assert.Throws<InvalidDataException>(() => Load(bytes));
 
             Assert.Contains("Block 0 (NiNode): A list count of 1073741824", ex.Message);
+            Assert.Contains("left in the stream", ex.Message);
+            Assert.False(NifLoadErrors.IsBlockSizeMismatch(ex));
+        }
+
+        [Fact(DisplayName = "A corrupted count in a small block of a large mesh throws before allocating for it")]
+        public void ListCountInSmallBlockOfLargeMesh_ThrowsBeforeAllocating()
+        {
+            // 32 MB of binary extra data leaves the whole stream room for millions of refs, but the root node's own
+            // stored size leaves room for none of them.
+            var bytes = BuildLargeMesh(32 * 1024 * 1024, out int childCountAt);
+            BitConverter.GetBytes(5_000_000).CopyTo(bytes, childCountAt);
+
+            using var ms = new MemoryStream(bytes, writable: false);
+            var nif = new NifFile();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            var ex = Assert.Throws<InvalidDataException>(() => nif.Load(ms));
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Contains("Block 0 (NiNode): A list count of 5000000 needs at least 20000000 bytes", ex.Message);
+            Assert.True(NifLoadErrors.IsBlockSizeMismatch(ex));
+            Assert.True(allocated < 1024 * 1024, $"Load allocated {allocated} bytes before it threw");
+        }
+
+        // A root node with one child node and one binary extra data block of the given size, saved; childCountAt is
+        // where the root's child count sits in the saved bytes.
+        static byte[] BuildLargeMesh(int dataSize, out int childCountAt)
+        {
+            var ver = new NiVersion { FileVersion = NiVersion.ToFile("20.2.0.7"), UserVersion = 12, StreamVersion = 100 };
+            var f = new NifFile();
+            f.Create(ver, withRootNode: true);
+            var root = f.GetRootNodes().First();
+            root.Name = new NiStringRef("LargeRoot");
+            root.Children.AddBlockRef(f.AddBlock(new NiNode { Name = new NiStringRef("LargeChild") }));
+            var data = new NiBinaryExtraData
+            {
+                Name = new NiStringRef("LargeData"),
+                BinaryData = new ByteArray { DataSize = (uint)dataSize, Data = new List<byte>(new byte[dataSize]) },
+            };
+            root.ExtraDataList ??= new NiBlockRefArray<NiExtraData>();
+            root.ExtraDataList.AddBlockRef(f.AddBlock(data));
+
+            using var ms = new MemoryStream();
+            Assert.Equal(0, f.Save(ms));
+            var bytes = ms.ToArray();
+
+            var nif = new NifFile();
+            using (var rs = new MemoryStream(bytes, writable: false))
+                Assert.Equal(0, nif.Load(rs));
+            Assert.IsType<NiNode>(nif.Blocks[0]);
+            int blocksTotal = Enumerable.Range(0, nif.Header.BlockCount).Sum(nif.Header.GetBlockSize);
+            int rootStart = bytes.Length - (4 + 4 * nif.GetRootNodes().Count) - blocksTotal;
+            // SSE NiNode: name, extra data count and its 1 ref, controller, flags, translation, rotation, scale, collision.
+            childCountAt = rootStart + 4 + 4 + 4 + 4 + 4 + 12 + 36 + 4 + 4;
+            Assert.Equal(1, BitConverter.ToInt32(bytes, childCountAt));
+            return bytes;
         }
 
         [Fact(DisplayName = "The unchanged mesh still loads")]

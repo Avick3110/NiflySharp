@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using System.Text;
 
 namespace NiflySharp.Stream
@@ -43,17 +44,31 @@ namespace NiflySharp.Stream
         }
 
         /// <summary>
+        /// Where the block being read ends by its stored size, or -1 outside a block or when the size is not known.
+        /// </summary>
+        internal long BlockEnd { get; set; } = -1;
+
+        /// <summary>
         /// Throws when <paramref name="count"/> elements of at least <paramref name="minElementSize"/> bytes each
-        /// cannot fit in the bytes left, so a corrupt count fails before anything is allocated for it.
+        /// cannot fit in the bytes left in the stream, or inside a block in what its stored size has left, so a corrupt
+        /// count fails before anything is allocated for it.
         /// </summary>
         internal void CheckCount(long count, int minElementSize, string what)
         {
             if (count <= 0)
                 return;
 
+            long need = count * minElementSize;
             long left = BytesLeft;
-            if (count > left / minElementSize)
-                throw new InvalidDataException($"{what} of {count} needs at least {count * minElementSize} bytes, but only {left} are left in the stream.");
+            if (need > left)
+                throw new InvalidDataException($"{what} of {count} needs at least {need} bytes, but only {left} are left in the stream.");
+
+            if (BlockEnd >= 0)
+            {
+                long blockLeft = Math.Max(BlockEnd - Reader.BaseStream.Position, 0);
+                if (need > blockLeft)
+                    throw NifLoadErrors.BlockSizeMismatch($"{what} of {count} needs at least {need} bytes, but only {blockLeft} are left in the block's stored size.");
+            }
         }
     }
 }
