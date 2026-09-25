@@ -342,7 +342,7 @@ namespace NiflySharp.Stream
             }
             else
             {
-                CheckListCount(size, MinEncodedSize(typeof(T)));
+                CheckListCount(size, MinSize<T>.Value);
                 ResizeListDefaults(ref list, size);
             }
         }
@@ -363,7 +363,13 @@ namespace NiflySharp.Stream
                 In.CheckCount(count, minElementSize, "A list count");
         }
 
-        private static readonly Dictionary<Type, int> minEncodedSizes = [];
+        /// <summary>
+        /// The fewest bytes one element of <typeparamref name="T"/> takes in a stream, worked out once per type.
+        /// </summary>
+        internal static class MinSize<T>
+        {
+            public static readonly int Value = MinEncodedSize(typeof(T));
+        }
 
         /// <summary>
         /// The fewest bytes one element of <paramref name="type"/> takes in a stream: its size for a fixed-size value,
@@ -371,29 +377,20 @@ namespace NiflySharp.Stream
         /// </summary>
         internal static int MinEncodedSize(Type type)
         {
-            lock (minEncodedSizes)
+            var t = type.IsEnum ? Enum.GetUnderlyingType(type) : type;
+            return Type.GetTypeCode(t) switch
             {
-                if (minEncodedSizes.TryGetValue(type, out int cached))
-                    return cached;
-
-                var t = type.IsEnum ? Enum.GetUnderlyingType(type) : type;
-                int size = Type.GetTypeCode(t) switch
-                {
-                    TypeCode.Int16 or TypeCode.UInt16 => 2,
-                    TypeCode.Int32 or TypeCode.UInt32 or TypeCode.Single => 4,
-                    TypeCode.Int64 or TypeCode.UInt64 or TypeCode.Double => 8,
-                    TypeCode.Decimal => 16,
-                    _ when t == typeof(Half) => 2,
-                    _ when t == typeof(Vector2) => 8,
-                    _ when t == typeof(Vector3) => 12,
-                    _ when t == typeof(Vector4) || t == typeof(Quaternion) => 16,
-                    _ when typeof(NiRef).IsAssignableFrom(t) || t == typeof(NiStringRef) => 4,
-                    _ => 1
-                };
-
-                minEncodedSizes[type] = size;
-                return size;
-            }
+                TypeCode.Int16 or TypeCode.UInt16 => 2,
+                TypeCode.Int32 or TypeCode.UInt32 or TypeCode.Single => 4,
+                TypeCode.Int64 or TypeCode.UInt64 or TypeCode.Double => 8,
+                TypeCode.Decimal => 16,
+                _ when t == typeof(Half) => 2,
+                _ when t == typeof(Vector2) => 8,
+                _ when t == typeof(Vector3) => 12,
+                _ when t == typeof(Vector4) || t == typeof(Quaternion) => 16,
+                _ when typeof(NiRef).IsAssignableFrom(t) || t == typeof(NiStringRef) => 4,
+                _ => 1
+            };
         }
 
         public void SyncList<SizeT, ValueT>(ref List<ValueT> list)
@@ -417,7 +414,7 @@ namespace NiflySharp.Stream
                 if (size < 0)
                     throw new Exception("Read list size is < 0!");
 
-                CheckListCount(size, MinEncodedSize(typeof(ValueT)));
+                CheckListCount(size, MinSize<ValueT>.Value);
                 ResizeListDefaults(ref list, size);
             }
             else
@@ -675,7 +672,7 @@ namespace NiflySharp.Stream
             }
             else
             {
-                CheckListCount(size, MinEncodedSize(typeof(T)));
+                CheckListCount(size, MinSize<T>.Value);
                 ResizeArrayDefaults(ref array, size);
             }
         }
